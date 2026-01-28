@@ -33,7 +33,7 @@ chatterbox-tts @ git+https://github.com/mridulrao/chatterbox.git@master
 # Core Web Framework
 # ------------------------------------------------------------
 fastapi
-uvicorn[standard]
+uvicorn[standard]>=0.29.0
 
 # ------------------------------------------------------------
 # ML & Audio Libraries
