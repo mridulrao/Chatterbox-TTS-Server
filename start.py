@@ -80,7 +80,7 @@ INSTALL_NAMES = {
 }
 
 # Chatterbox fork URL (used for CUDA 12.8 installation)
-CHATTERBOX_REPO = "git+https://github.com/devnen/chatterbox-v2.git@master"
+CHATTERBOX_REPO = "git+https://github.com/mridulrao/chatterbox.git@master"
 
 # Timeout settings (seconds)
 SERVER_STARTUP_TIMEOUT = 180  # Model loading can be slow

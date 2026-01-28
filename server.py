@@ -945,6 +945,10 @@ async def custom_tts_endpoint(
                 seed=(
                     request.seed if request.seed is not None else get_gen_default_seed()
                 ),
+                language_id=(
+                    getattr(request, "language", None)  
+                    or get_gen_default_language()       # if not provided, use default from config generation_defaults.language
+                ),
             )
             perf_monitor.record(f"Engine synthesized chunk {i+1}")
 
