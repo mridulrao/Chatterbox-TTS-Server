@@ -18,7 +18,7 @@
 #
 # For manual installation, run these commands in order:
 #   pip install -r requirements-nvidia-cu128.txt
-#   pip install --no-deps git+https://github.com/devnen/chatterbox-v2.git@master
+#   pip install --no-deps git+https://github.com/mridulrao/chatterbox.git@master
 # ============================================================================
 
 # --- PyTorch CUDA 12.8 Package Index ---
@@ -31,8 +31,8 @@
 #torchaudio==2.9.0
 
 # Chatterbox TTS engine - Install from chatterbox-v2 fork
-chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git@master
-#    pip3 install --no-cache-dir --no-deps git+https://github.com/resemble-ai/chatterbox.git;
+chatterbox-tts @ git+https://github.com/mridulrao/chatterbox.git@master
+#    pip3 install --no-cache-dir --no-deps git+https://github.com/mridulrao/chatterbox.git;
 # --- Core Web Framework ---
 fastapi
 uvicorn[standard]

@@ -1,7 +1,7 @@
 # requirements.txt
 
 # Chatterbox TTS engine - Install from chatterbox-v2 fork
-chatterbox-tts @ git+https://github.com/devnen/chatterbox-v2.git@master
+chatterbox-tts @ git+https://github.com/mridulrao/chatterbox.git@master
 
 # Core Web Framework
 fastapi

@@ -1,32 +1,50 @@
 # requirements-nvidia.txt (For NVIDIA GPU Installation with CUDA 12.1)
 # This file ensures a compatible set of CUDA-enabled torch packages are installed.
 
-# Use the official PyTorch package index for CUDA 12.1.
+# ------------------------------------------------------------
+# PyTorch CUDA 12.1 index
+# ------------------------------------------------------------
 --extra-index-url https://download.pytorch.org/whl/cu121
 
-# Pinning a compatible set of torch-related libraries is crucial to avoid dependency conflicts.
-# Updated to use PyTorch 2.5.1 for compatibility with our Colab-compatible chatterbox fork
+# ------------------------------------------------------------
+# Torch stack (CUDA 12.1)
+# ------------------------------------------------------------
 torch==2.5.1+cu121
 torchvision==0.20.1+cu121
 torchaudio==2.5.1+cu121
 
-# --- Core Application Dependencies ---
+# ------------------------------------------------------------
+# CRITICAL dependency pins (prevents ONNX source build)
+# ------------------------------------------------------------
+# Python 3.11 compatible wheels only
+numpy>=1.24.0,<2.0
+onnx==1.19.1
 
-# Chatterbox TTS engine - Install from chatterbox-v2 fork
-chatterbox-tts @ git+https://github.com/devnen/chatterbox-v2.git@master
+# s3tokenizer pulls ONNX transitively – pin it explicitly
+s3tokenizer==0.2.0
 
+# ------------------------------------------------------------
+# Chatterbox TTS engine (your fork)
+# ------------------------------------------------------------
+chatterbox-tts @ git+https://github.com/mridulrao/chatterbox.git@master
+
+# ------------------------------------------------------------
 # Core Web Framework
+# ------------------------------------------------------------
 fastapi
 uvicorn[standard]
 
-# Other ML & Audio Libraries
-numpy>=1.24.0,<1.26.0  # Match chatterbox-v2 requirements
-soundfile  # Requires libsndfile system library
+# ------------------------------------------------------------
+# ML & Audio Libraries
+# ------------------------------------------------------------
+soundfile                 # Requires libsndfile system library
 librosa
 safetensors
 descript-audio-codec
 
+# ------------------------------------------------------------
 # Configuration & Utilities
+# ------------------------------------------------------------
 PyYAML
 python-multipart
 requests
@@ -36,9 +54,11 @@ aiofiles
 unidecode
 inflect
 tqdm
-hf_transfer                     # Speed up file transfers
+hf_transfer               # Speed up HF downloads
 
+# ------------------------------------------------------------
 # Audio Post-processing
+# ------------------------------------------------------------
 pydub
 audiotsm
 praat-parselmouth
