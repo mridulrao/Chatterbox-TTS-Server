@@ -1,9 +1,8 @@
 # requirements-nvidia.txt (For NVIDIA GPU Installation)
 #
 # NOTE:
-# chatterbox-tts pins torch==2.6.0, so we align torch/vision/audio accordingly.
-# Use PyTorch CUDA wheel index as an *extra* index (do NOT replace PyPI),
-# otherwise packages like onnx won't be found.
+# - chatterbox-tts pins torch==2.6.0, so we align torch/vision/audio.
+# - Keep PyTorch wheels as an *extra* index (do NOT replace PyPI).
 
 # ------------------------------------------------------------
 # PyTorch CUDA wheel index (cu124)
@@ -18,9 +17,18 @@ torchvision==0.21.0
 torchaudio==2.6.0
 
 # ------------------------------------------------------------
+# Resolver "branch killers" (prevents resolution-too-deep)
+# ------------------------------------------------------------
+# Torch wants typing-extensions>=4.10; pin a modern version to stop backtracking
+typing-extensions==4.14.1
+
+# Uvicorn[standard] uses websockets; pin to avoid solver iterating old 10.x sdists
+websockets==16.0
+
+# ------------------------------------------------------------
 # CRITICAL dependency pins (prevents ONNX source build)
 # ------------------------------------------------------------
-numpy>=1.24.0,<2.0
+numpy==1.26.4
 onnx==1.19.1
 s3tokenizer==0.2.0
 
@@ -30,36 +38,36 @@ s3tokenizer==0.2.0
 chatterbox-tts @ git+https://github.com/mridulrao/chatterbox.git@master
 
 # ------------------------------------------------------------
-# Core Web Framework
+# Core Web Framework (PINNED)
 # ------------------------------------------------------------
-fastapi
-uvicorn[standard]>=0.29.0
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
 
 # ------------------------------------------------------------
-# ML & Audio Libraries
+# ML & Audio Libraries (PINNED)
 # ------------------------------------------------------------
-soundfile                 # Requires libsndfile system library
-librosa
-safetensors
-descript-audio-codec
+soundfile==0.13.1
+librosa==0.11.0
+safetensors==0.7.0
+descript-audio-codec==1.0.0
 
 # ------------------------------------------------------------
-# Configuration & Utilities
+# Configuration & Utilities (PINNED)
 # ------------------------------------------------------------
-PyYAML
-python-multipart
-requests
-Jinja2
-watchdog
-aiofiles
-unidecode
-inflect
-tqdm
-hf_transfer               # Speed up HF downloads
+PyYAML==6.0.3
+python-multipart==0.0.22
+requests==2.32.5
+Jinja2==3.1.6
+watchdog==6.0.0
+aiofiles==25.1.0
+unidecode==1.4.0
+inflect==7.5.0
+tqdm==4.67.1
+hf_transfer==0.1.9
 
 # ------------------------------------------------------------
-# Audio Post-processing
+# Audio Post-processing (PINNED)
 # ------------------------------------------------------------
-pydub
-audiotsm
-praat-parselmouth
+pydub==0.25.1
+audiotsm==0.1.2
+praat-parselmouth==0.4.7
