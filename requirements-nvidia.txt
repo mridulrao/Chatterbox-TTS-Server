@@ -1,13 +1,14 @@
 # requirements-nvidia.txt (For NVIDIA GPU Installation)
 #
 # NOTE:
-# chatterbox-tts currently pins torch==2.6.0, so we must align torch/vision/audio.
-# PyTorch 2.6.0 wheels are available for cu118/cu124/cu126 (NOT cu121).  :contentReference[oaicite:1]{index=1}
+# chatterbox-tts pins torch==2.6.0, so we align torch/vision/audio accordingly.
+# Use PyTorch CUDA wheel index as an *extra* index (do NOT replace PyPI),
+# otherwise packages like onnx won't be found.
 
 # ------------------------------------------------------------
-# PyTorch CUDA wheel index (use cu124 for torch 2.6.0)
+# PyTorch CUDA wheel index (cu124)
 # ------------------------------------------------------------
---index-url https://download.pytorch.org/whl/cu124
+--extra-index-url https://download.pytorch.org/whl/cu124
 
 # ------------------------------------------------------------
 # Torch stack (aligned with chatterbox-tts expectations)
