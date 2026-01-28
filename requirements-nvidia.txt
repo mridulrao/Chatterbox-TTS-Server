@@ -1,26 +1,26 @@
-# requirements-nvidia.txt (For NVIDIA GPU Installation with CUDA 12.1)
-# This file ensures a compatible set of CUDA-enabled torch packages are installed.
+# requirements-nvidia.txt (For NVIDIA GPU Installation)
+#
+# NOTE:
+# chatterbox-tts currently pins torch==2.6.0, so we must align torch/vision/audio.
+# PyTorch 2.6.0 wheels are available for cu118/cu124/cu126 (NOT cu121).  :contentReference[oaicite:1]{index=1}
 
 # ------------------------------------------------------------
-# PyTorch CUDA 12.1 index
+# PyTorch CUDA wheel index (use cu124 for torch 2.6.0)
 # ------------------------------------------------------------
---extra-index-url https://download.pytorch.org/whl/cu121
+--index-url https://download.pytorch.org/whl/cu124
 
 # ------------------------------------------------------------
-# Torch stack (CUDA 12.1)
+# Torch stack (aligned with chatterbox-tts expectations)
 # ------------------------------------------------------------
-torch==2.5.1+cu121
-torchvision==0.20.1+cu121
-torchaudio==2.5.1+cu121
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
 
 # ------------------------------------------------------------
 # CRITICAL dependency pins (prevents ONNX source build)
 # ------------------------------------------------------------
-# Python 3.11 compatible wheels only
 numpy>=1.24.0,<2.0
 onnx==1.19.1
-
-# s3tokenizer pulls ONNX transitively – pin it explicitly
 s3tokenizer==0.2.0
 
 # ------------------------------------------------------------
