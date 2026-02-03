@@ -1,0 +1,11 @@
+# requirements-nvidia-pytorch.txt
+# ============================================================================
+# PyTorch with CUDA 12.4 - Pre-install for NVIDIA GPU
+# ============================================================================
+# This file is installed FIRST before other dependencies to avoid conflicts
+# ============================================================================
+
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0
+torchaudio==2.6.0
+torchvision==0.21.0

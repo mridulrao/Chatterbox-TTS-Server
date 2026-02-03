@@ -1,0 +1,11 @@
+# requirements-nvidia-cu128-pytorch.txt
+# ============================================================================
+# PyTorch with CUDA 12.8 - Pre-install for RTX 5090/Blackwell GPUs
+# ============================================================================
+# This file is installed FIRST before other dependencies to avoid conflicts
+# ============================================================================
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.8.0
+torchaudio==2.8.0
+torchvision==0.23.0

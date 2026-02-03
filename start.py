@@ -901,13 +901,53 @@ def perform_installation(venv_pip, install_type, root_dir):
         print_error(f"Unknown installation type: {install_type}")
         return False
 
-    # Step 1: Install requirements
-    if not install_requirements(venv_pip, requirements_file, root_dir):
-        return False
-
-    # Step 2: For CUDA 12.8, install chatterbox separately with --no-deps
-    if install_type == INSTALL_NVIDIA_CU128:
+    # ========================================================================
+    # CRITICAL FIX: Two-phase installation for NVIDIA to avoid PyTorch conflicts
+    # ========================================================================
+    # For NVIDIA installations, we install PyTorch with CUDA FIRST from a
+    # separate requirements file. This prevents pip from trying to resolve
+    # torch==2.6.0 (from chatterbox) vs torch==2.6.0+cu124 simultaneously.
+    # ========================================================================
+    
+    if install_type == INSTALL_NVIDIA:
+        # Phase 1: Install PyTorch with CUDA 12.4
+        pytorch_req = "requirements-nvidia-pytorch.txt"
+        print_substep("Phase 1: Installing PyTorch with CUDA 12.4...")
+        
+        if not install_requirements(venv_pip, pytorch_req, root_dir):
+            print_substep("PyTorch installation failed", "error")
+            return False
+        
+        print_substep("PyTorch with CUDA installed successfully", "done")
+        print_substep("Phase 2: Installing remaining dependencies...", "info")
+        
+        # Phase 2: Install main requirements (will skip torch - already satisfied)
+        if not install_requirements(venv_pip, requirements_file, root_dir):
+            return False
+    
+    elif install_type == INSTALL_NVIDIA_CU128:
+        # Phase 1: Install PyTorch with CUDA 12.8
+        pytorch_req = "requirements-nvidia-cu128-pytorch.txt"
+        print_substep("Phase 1: Installing PyTorch with CUDA 12.8...")
+        
+        if not install_requirements(venv_pip, pytorch_req, root_dir):
+            print_substep("PyTorch installation failed", "error")
+            return False
+        
+        print_substep("PyTorch with CUDA 12.8 installed successfully", "done")
+        print_substep("Phase 2: Installing remaining dependencies...", "info")
+        
+        # Phase 2: Install main requirements
+        if not install_requirements(venv_pip, requirements_file, root_dir):
+            return False
+        
+        # Phase 3: Install chatterbox with --no-deps (preserve PyTorch 2.8)
         if not install_chatterbox_no_deps(venv_pip):
+            return False
+    
+    else:
+        # For CPU and ROCm, standard single-phase installation works fine
+        if not install_requirements(venv_pip, requirements_file, root_dir):
             return False
 
     return True
