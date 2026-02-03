@@ -901,14 +901,6 @@ def perform_installation(venv_pip, install_type, root_dir):
         print_error(f"Unknown installation type: {install_type}")
         return False
 
-    # ========================================================================
-    # CRITICAL FIX: Two-phase installation for NVIDIA to avoid PyTorch conflicts
-    # ========================================================================
-    # For NVIDIA installations, we install PyTorch with CUDA FIRST from a
-    # separate requirements file. This prevents pip from trying to resolve
-    # torch==2.6.0 (from chatterbox) vs torch==2.6.0+cu124 simultaneously.
-    # ========================================================================
-    
     if install_type == INSTALL_NVIDIA:
         # Phase 1: Install PyTorch with CUDA 12.4
         pytorch_req = "requirements-nvidia-pytorch.txt"
@@ -919,11 +911,22 @@ def perform_installation(venv_pip, install_type, root_dir):
             return False
         
         print_substep("PyTorch with CUDA installed successfully", "done")
-        print_substep("Phase 2: Installing remaining dependencies...", "info")
+        print_substep("Phase 2: Installing main dependencies...", "info")
         
-        # Phase 2: Install main requirements (will skip torch - already satisfied)
+        # Phase 2: Install main requirements
         if not install_requirements(venv_pip, requirements_file, root_dir):
             return False
+        
+        # Phase 3: Install descript-audio-codec with --no-deps to avoid protobuf conflict
+        print_substep("Phase 3: Installing descript-audio-codec (no deps)...", "info")
+        cmd = f'"{venv_pip}" install --no-deps descript-audio-codec==1.0.0'
+        success = run_command_with_progress(
+            cmd,
+            description="Installing descript-audio-codec"
+        )
+        if not success:
+            print_substep("Warning: descript-audio-codec installation failed", "warning")
+            print_substep("Continuing anyway (may not affect core functionality)", "info")
     
     elif install_type == INSTALL_NVIDIA_CU128:
         # Phase 1: Install PyTorch with CUDA 12.8
@@ -935,18 +938,28 @@ def perform_installation(venv_pip, install_type, root_dir):
             return False
         
         print_substep("PyTorch with CUDA 12.8 installed successfully", "done")
-        print_substep("Phase 2: Installing remaining dependencies...", "info")
+        print_substep("Phase 2: Installing main dependencies...", "info")
         
         # Phase 2: Install main requirements
         if not install_requirements(venv_pip, requirements_file, root_dir):
             return False
         
-        # Phase 3: Install chatterbox with --no-deps (preserve PyTorch 2.8)
+        # Phase 3: Install chatterbox with --no-deps
         if not install_chatterbox_no_deps(venv_pip):
             return False
+        
+        # Phase 4: Install descript-audio-codec with --no-deps
+        print_substep("Phase 4: Installing descript-audio-codec (no deps)...", "info")
+        cmd = f'"{venv_pip}" install --no-deps descript-audio-codec==1.0.0'
+        success = run_command_with_progress(
+            cmd,
+            description="Installing descript-audio-codec"
+        )
+        if not success:
+            print_substep("Warning: descript-audio-codec installation failed", "warning")
     
     else:
-        # For CPU and ROCm, standard single-phase installation works fine
+        # For CPU and ROCm, standard single-phase installation
         if not install_requirements(venv_pip, requirements_file, root_dir):
             return False
 

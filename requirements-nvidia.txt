@@ -2,9 +2,26 @@
 # ============================================================================
 # Chatterbox TTS Server - NVIDIA GPU Dependencies
 # ============================================================================
-# NOTE: PyTorch with CUDA is installed separately from requirements-nvidia-pytorch.txt
-# This file contains all other dependencies
-# ============================================================================
+
+# ------------------------------------------------------------
+# Modern protobuf and ONNX (for most packages)
+# ------------------------------------------------------------
+protobuf>=4.21.0,<6.0.0
+onnx>=1.15.0
+
+# Core ML dependencies
+numpy>=1.24.0,<2.1.0
+transformers==4.46.3
+diffusers==0.29.0
+safetensors==0.5.3
+huggingface-hub>=0.26.0
+
+# Audio processing
+librosa==0.11.0
+soundfile==0.13.1
+
+# Text processing
+s3tokenizer
 
 # ------------------------------------------------------------
 # Chatterbox TTS (will use already-installed PyTorch)
@@ -33,10 +50,19 @@ hf-transfer==0.1.9
 argbind==0.3.9
 
 # ------------------------------------------------------------
-# Audio Processing
+# Audio Processing (SKIP descript-audio-codec here)
 # ------------------------------------------------------------
-soundfile==0.13.1
-descript-audio-codec==1.0.0
 pydub==0.25.1
 audiotsm==0.1.2
 praat-parselmouth==0.4.7
+
+# ------------------------------------------------------------
+# Additional chatterbox dependencies
+# ------------------------------------------------------------
+omegaconf>=2.3.0
+spacy-pkuseg
+pykakasi==2.3.0
+pyloudnorm
+conformer==0.3.2
+resemble-perth==1.0.1
+gradio>=4.0.0,<6.0.0
