@@ -64,5 +64,7 @@ ui:
   title: Chatterbox TTS Server
   show_language_select: true
   max_predefined_voices_in_dropdown: 50
+  languages: ["en", "no", "hi", "es"]
+
 debug:
   save_intermediate_audio: false

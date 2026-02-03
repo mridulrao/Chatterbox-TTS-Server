@@ -27,6 +27,10 @@ document.addEventListener('DOMContentLoaded', async function () {
     let hideGenerationWarning = false;
     let currentVoiceMode = 'predefined';
 
+    // Language state (NEW)
+    let supportedLanguages = ['en']; // fallback
+    let languageInitialized = false;
+
     const IS_LOCAL_FILE = window.location.protocol === 'file:';
     // If you always access the server via localhost
     const API_BASE_URL = IS_LOCAL_FILE ? 'http://localhost:8004' : '';
@@ -191,6 +195,88 @@ document.addEventListener('DOMContentLoaded', async function () {
         return `${minutes}:${secs}`;
     }
 
+    // --- Language helpers (NEW) ---
+    function normalizeLangId(lang) {
+        if (!lang) return null;
+        return String(lang).trim().toLowerCase();
+    }
+
+    function uniq(arr) {
+        const seen = new Set();
+        const out = [];
+        for (const x of arr || []) {
+            const v = normalizeLangId(x);
+            if (!v) continue;
+            if (!seen.has(v)) {
+                seen.add(v);
+                out.push(v);
+            }
+        }
+        return out;
+    }
+
+    function computeSupportedLanguages() {
+        // Priority:
+        // 1) currentConfig.ui.languages (you add this in config.yaml)
+        // 2) currentConfig.generation_defaults.languages (optional)
+        // 3) currentModelInfo.supported_language_ids (if you add this in backend later)
+        // 4) fallback to ['en']
+
+        const fromUi = currentConfig?.ui?.languages;
+        const fromDefaults = currentConfig?.generation_defaults?.languages;
+        const fromModelInfo = currentModelInfo?.supported_language_ids;
+
+        const merged = []
+            .concat(Array.isArray(fromUi) ? fromUi : [])
+            .concat(Array.isArray(fromDefaults) ? fromDefaults : [])
+            .concat(Array.isArray(fromModelInfo) ? fromModelInfo : []);
+
+        const langs = uniq(merged);
+        return langs.length ? langs : ['en'];
+    }
+
+    function populateLanguageSelect() {
+        if (!languageSelect) return;
+
+        supportedLanguages = computeSupportedLanguages();
+
+        // Rebuild <select> options
+        const previouslySelected = normalizeLangId(languageSelect.value);
+        languageSelect.innerHTML = '';
+
+        supportedLanguages.forEach((lang) => {
+            const opt = document.createElement('option');
+            opt.value = lang;
+            opt.textContent = lang.toUpperCase();
+            languageSelect.appendChild(opt);
+        });
+
+        // Decide selection:
+        // 1) last saved UI state (if it exists & supported)
+        // 2) config generation_defaults.language (if supported)
+        // 3) keep previous selection (if supported)
+        // 4) first item
+        const stateLang = normalizeLangId(currentUiState?.last_language);
+        const configDefault = normalizeLangId(currentConfig?.generation_defaults?.language) || 'en';
+
+        let pick = null;
+        if (stateLang && supportedLanguages.includes(stateLang)) pick = stateLang;
+        else if (configDefault && supportedLanguages.includes(configDefault)) pick = configDefault;
+        else if (previouslySelected && supportedLanguages.includes(previouslySelected)) pick = previouslySelected;
+        else pick = supportedLanguages[0];
+
+        languageSelect.value = pick;
+
+        // If config says to hide language select
+        if (languageSelectContainer && currentConfig?.ui?.show_language_select === false) {
+            languageSelectContainer.classList.add('hidden');
+        } else if (languageSelectContainer) {
+            languageSelectContainer.classList.remove('hidden');
+        }
+
+        languageInitialized = true;
+    }
+
     // --- Theme Management ---
     function applyTheme(theme) {
         const isDark = theme === 'dark';
@@ -230,6 +316,9 @@ document.addEventListener('DOMContentLoaded', async function () {
             hide_generation_warning: hideGenerationWarning,
             theme: localStorage.getItem('uiTheme') || 'dark',
             last_preset_name: currentPresetName,
+
+            // NEW: persist language selection (won't break server if ignored)
+            last_language: languageSelect ? normalizeLangId(languageSelect.value) : null,
         };
 
         try {
@@ -330,6 +419,9 @@ document.addEventListener('DOMContentLoaded', async function () {
             exaggerationGroup?.classList.remove('hidden');
             cfgWeightGroup?.classList.remove('hidden');
         }
+
+        // NEW: language options may depend on model
+        populateLanguageSelect();
 
         // Refresh presets to filter based on current model type
         populatePresets();
@@ -492,6 +584,10 @@ document.addEventListener('DOMContentLoaded', async function () {
         document.title = pageTitle;
         if (appTitleLink) appTitleLink.textContent = pageTitle;
         if (ttsFormHeader) ttsFormHeader.textContent = `Generate Speech`;
+
+        // NEW: populate language dropdown early (so loadInitialUiState can safely set value)
+        populateLanguageSelect();
+
         loadInitialUiState();
         populatePredefinedVoices();
         populateReferenceFiles();
@@ -527,6 +623,9 @@ document.addEventListener('DOMContentLoaded', async function () {
             // NEW: Handle model info from initial data
             if (data.model_info) {
                 updateModelUI(data.model_info);
+            } else {
+                // still ensure languages populate even if model_info missing
+                populateLanguageSelect();
             }
 
             initializeApplication();
@@ -538,6 +637,8 @@ document.addEventListener('DOMContentLoaded', async function () {
                 currentConfig = { ui: { title: "Chatterbox TTS Server (Error Mode)" }, generation_defaults: {}, ui_state: {} };
                 currentUiState = currentConfig.ui_state;
             }
+            // ensure language dropdown exists even in degraded mode
+            populateLanguageSelect();
             initializeApplication(); // Attempt to init in a degraded state
         } finally {
             // --- PHASE 2: Attach listeners and enable UI readiness ---
@@ -593,7 +694,26 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (cfgWeightValueDisplay) cfgWeightValueDisplay.textContent = cfgWeightSlider.value;
         if (speedFactorSlider) speedFactorSlider.value = genDefaults.speed_factor !== undefined ? genDefaults.speed_factor : 1.0;
         if (speedFactorValueDisplay) speedFactorValueDisplay.textContent = speedFactorSlider.value;
-        if (languageSelect) languageSelect.value = genDefaults.language || 'en';
+
+        // NEW: language selection should respect supportedLanguages list
+        // Order:
+        // 1) ui_state.last_language (if supported)
+        // 2) generation_defaults.language (if supported)
+        // 3) keep existing select value (if supported)
+        // 4) first supported language
+        if (languageSelect) {
+            if (!languageInitialized) populateLanguageSelect();
+
+            const stateLang = normalizeLangId(currentUiState?.last_language);
+            const cfgLang = normalizeLangId(genDefaults.language || 'en');
+            const currentVal = normalizeLangId(languageSelect.value);
+
+            if (stateLang && supportedLanguages.includes(stateLang)) languageSelect.value = stateLang;
+            else if (cfgLang && supportedLanguages.includes(cfgLang)) languageSelect.value = cfgLang;
+            else if (currentVal && supportedLanguages.includes(currentVal)) languageSelect.value = currentVal;
+            else languageSelect.value = supportedLanguages[0] || 'en';
+        }
+
         if (outputFormatSelect) outputFormatSelect.value = currentConfig?.audio_output?.format || 'mp3';
 
         if (hideChunkWarningCheckbox) hideChunkWarningCheckbox.checked = hideChunkWarning;
@@ -650,7 +770,10 @@ document.addEventListener('DOMContentLoaded', async function () {
                 slider.addEventListener('change', debouncedSaveState);
             }
         });
+
+        // language change should save (and is now meaningful)
         if (languageSelect) languageSelect.addEventListener('change', debouncedSaveState);
+
         if (outputFormatSelect) outputFormatSelect.addEventListener('change', debouncedSaveState);
 
         // NEW: Model management listeners
@@ -784,7 +907,15 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (cfgWeightSlider && genParams.cfg_weight !== undefined) cfgWeightSlider.value = genParams.cfg_weight;
         if (speedFactorSlider && genParams.speed_factor !== undefined) speedFactorSlider.value = genParams.speed_factor;
         if (seedInput && genParams.seed !== undefined) seedInput.value = genParams.seed;
-        if (languageSelect && genParams.language !== undefined) languageSelect.value = genParams.language;
+
+        // NEW: preset language should be applied only if supported; else keep current
+        if (languageSelect && genParams.language !== undefined) {
+            const lang = normalizeLangId(genParams.language);
+            if (lang && supportedLanguages.includes(lang)) {
+                languageSelect.value = lang;
+            }
+        }
+
         if (temperatureValueDisplay && temperatureSlider) temperatureValueDisplay.textContent = temperatureSlider.value;
         if (exaggerationValueDisplay && exaggerationSlider) exaggerationValueDisplay.textContent = exaggerationSlider.value;
         if (cfgWeightValueDisplay && cfgWeightSlider) cfgWeightValueDisplay.textContent = cfgWeightSlider.value;
@@ -962,6 +1093,12 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     // --- TTS Generation Logic ---
     function getTTSFormData() {
+        // Ensure language is valid even if someone edits the DOM
+        let lang = normalizeLangId(languageSelect ? languageSelect.value : null) || 'en';
+        if (supportedLanguages && supportedLanguages.length > 0 && !supportedLanguages.includes(lang)) {
+            lang = supportedLanguages[0];
+        }
+
         const jsonData = {
             text: textArea.value,
             temperature: parseFloat(temperatureSlider.value),
@@ -969,7 +1106,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             cfg_weight: parseFloat(cfgWeightSlider.value),
             speed_factor: parseFloat(speedFactorSlider.value),
             seed: parseInt(seedInput.value, 10),
-            language: languageSelect.value,
+            language: lang,
             voice_mode: currentVoiceMode,
             split_text: splitTextToggle.checked,
             chunk_size: parseInt(chunkSizeSlider.value, 10),
@@ -1212,7 +1349,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             const genParams = {
                 temperature: parseFloat(temperatureSlider.value), exaggeration: parseFloat(exaggerationSlider.value),
                 cfg_weight: parseFloat(cfgWeightSlider.value), speed_factor: parseFloat(speedFactorSlider.value),
-                seed: parseInt(seedInput.value, 10) || 0, language: languageSelect.value
+                seed: parseInt(seedInput.value, 10) || 0, language: normalizeLangId(languageSelect.value)
             };
             updateConfigStatus(saveGenDefaultsBtn, genDefaultsStatus, 'Saving generation defaults...', 'info', 0, false);
             try {

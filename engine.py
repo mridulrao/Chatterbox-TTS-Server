@@ -10,7 +10,12 @@ from typing import Optional, Tuple
 from pathlib import Path
 
 from chatterbox.tts import ChatterboxTTS  # Main TTS engine class
-from chatterbox.mtl_tts import ChatterboxMultilingualTTS  # multilingual TTS engine class
+try:
+    from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+    MULTILINGUAL_AVAILABLE = True
+except ImportError:
+    ChatterboxMultilingualTTS = None
+    MULTILINGUAL_AVAILABLE = False  # multilingual TTS engine class
 from chatterbox.models.s3gen.const import (
     S3GEN_SR,
 )  # Default sample rate from the engine
