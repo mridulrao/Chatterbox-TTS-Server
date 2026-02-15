@@ -446,11 +446,13 @@ def synthesize_stream(
     seed: int = 0,
     chunk_size: int = 25,
     first_chunk_size: int = 5,
-    context_window: int = 50,
+    context_window: int = 25,          # default aligned with your best config
     fade_duration: float = 0.02,
     print_metrics: bool = False,
     max_new_tokens: int = 1000,
     max_history_tokens: int = 500,
+    n_cfm_timesteps: int = 3,          
+    skip_watermark: bool = True,
 ):
     """
     Synthesizes audio from text using streaming generation (multilingual model only).
@@ -471,6 +473,8 @@ def synthesize_stream(
         print_metrics: Whether to print performance metrics to console.
         max_new_tokens: Maximum number of speech tokens to generate.
         max_history_tokens: Maximum token history to maintain (prevents memory growth).
+        n_cfm_timesteps: Number of CFM steps for flow vocoder (lower = faster, potentially lower quality).
+        skip_watermark: If True, do NOT watermark per chunk (best for streaming latency).
 
     Yields:
         Tuple of (audio_chunk_tensor, metrics_dict) for each generated chunk.
@@ -497,26 +501,28 @@ def synthesize_stream(
         )
 
     try:
-        # Set seed globally if a specific seed value is provided and is non-zero
+        # Seed
         if seed != 0:
             logger.info(f"Applying user-provided seed for streaming generation: {seed}")
             set_seed(seed)
         else:
-            logger.info(
-                "Using default (potentially random) generation behavior for streaming as seed is 0."
-            )
-
-        logger.info(
-            f"Starting streaming synthesis with params: audio_prompt='{audio_prompt_path}', "
-            f"temp={temperature}, exag={exaggeration}, cfg_weight={cfg_weight}, "
-            f"chunk_size={chunk_size}, first_chunk_size={first_chunk_size}, language_id={language_id}"
-        )
+            logger.info("Using default (potentially random) generation behavior for streaming as seed is 0.")
 
         # Default language if not provided
         if not language_id:
             language_id = config_manager.get_string("generation_defaults.language", "en")
 
-        # Call the multilingual model's streaming generate function
+        skip_watermark = True
+
+        logger.info(
+            f"Starting streaming synthesis with params: audio_prompt='{audio_prompt_path}', "
+            f"temp={temperature}, exag={exaggeration}, cfg_weight={cfg_weight}, "
+            f"chunk_size={chunk_size}, first_chunk_size={first_chunk_size}, "
+            f"ctx={context_window}, cfm={n_cfm_timesteps}, skip_wm={skip_watermark}, "
+            f"language_id={language_id}"
+        )
+
+        # Stream from model
         for audio_chunk_tensor, metrics in chatterbox_model.generate_stream(
             text=text,
             language_id=language_id,
@@ -524,9 +530,9 @@ def synthesize_stream(
             exaggeration=exaggeration,
             cfg_weight=cfg_weight,
             temperature=temperature,
-            repetition_penalty=2.0,  # Could be made configurable
-            min_p=0.05,  # Could be made configurable
-            top_p=1.0,  # Could be made configurable
+            repetition_penalty=2.0,  # could be configurable
+            min_p=0.05,              # could be configurable
+            top_p=1.0,               # could be configurable
             chunk_size=chunk_size,
             first_chunk_size=first_chunk_size,
             context_window=context_window,
@@ -534,8 +540,10 @@ def synthesize_stream(
             print_metrics=print_metrics,
             max_new_tokens=max_new_tokens,
             max_history_tokens=max_history_tokens,
+            n_cfm_timesteps=n_cfm_timesteps,
+            skip_watermark=skip_watermark,
         ):
-            # Convert metrics dataclass to dict for easier serialization
+            # Convert metrics dataclass -> dict for serialization
             metrics_dict = {
                 "latency_to_first_chunk": metrics.latency_to_first_chunk,
                 "rtf": metrics.rtf,
@@ -557,7 +565,6 @@ def synthesize_stream(
     except Exception as e:
         logger.error(f"Error during streaming TTS synthesis: {e}", exc_info=True)
         raise RuntimeError(f"Streaming synthesis failed: {e}")
-
 
 def reload_model() -> bool:
     """

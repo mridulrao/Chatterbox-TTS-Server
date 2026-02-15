@@ -72,6 +72,29 @@ import utils  # Utility functions
 
 from pydantic import BaseModel, Field
 
+# BEST_STREAMING_PRESET = {
+#     # T3 sampling / alignment behavior
+#     "temperature": 0.8,
+#     "exaggeration": 0.5,
+#     "cfg_weight": 0.5,
+
+#     # Streaming chunking
+#     "first_chunk_size": 5,
+#     "chunk_size": 25,
+
+#     # Vocoder / streaming stability knobs
+#     "context_window": 25,
+#     "n_cfm_timesteps": 3,
+
+#     # Always disable watermark in streaming hot path
+#     "skip_watermark": True,
+# }
+
+# FAST_FIRST_CHUNK_PRESET = {
+#     **BEST_STREAMING_PRESET,
+#     "n_cfm_timesteps": 2,  # faster TTFC, sometimes more repetition
+# }
+
 
 class StreamingTTSRequest(BaseModel):
     """Request model for streaming TTS generation."""
@@ -1582,38 +1605,10 @@ async def openai_speech_endpoint(request: OpenAISpeechRequest):
 
 @app.websocket("/ws/tts/stream")
 async def websocket_tts_stream(websocket: WebSocket):
-    """
-    WebSocket endpoint for bidirectional TTS streaming.
-    
-    This enables true real-time streaming for conversational AI applications.
-    More suitable for LiveKit agents than the HTTP streaming endpoint.
-    
-    Protocol:
-    ---------
-    Client → Server:
-        {"type": "config", "voice_mode": "predefined", "predefined_voice_id": "voice.wav", "language": "en", ...}
-        {"type": "text", "data": "Hello world"}
-        {"type": "text", "data": "More text"}  
-        {"type": "flush"}  # Triggers synthesis
-        {"type": "close"}
-    
-    Server → Client:
-        {"type": "config_ack", "message": "Configuration updated"}
-        {"type": "audio", "data": <base64 audio>, "chunk_index": 0, "format": "wav"}
-        {"type": "done", "chunks_sent": N}
-        {"type": "error", "message": "Error description"}
-        {"type": "goodbye"}
-    
-    Example usage with wscat:
-        wscat -c wss://your-server.com/ws/tts/stream
-        > {"type":"config","voice_mode":"predefined","predefined_voice_id":"voice.wav","language":"en"}
-        > {"type":"text","data":"Hello world"}
-        > {"type":"flush"}
-    """
     await websocket.accept()
     logger.info("WebSocket TTS client connected")
-    
-    # Configuration for this session
+
+    # Session config (defaults to your best config)
     config = {
         "voice_mode": "predefined",
         "predefined_voice_id": None,
@@ -1624,44 +1619,103 @@ async def websocket_tts_stream(websocket: WebSocket):
         "cfg_weight": 0.5,
         "chunk_size": 25,
         "first_chunk_size": 5,
+        "context_window": 25,
+        "n_cfm_timesteps": 3,
+        "skip_watermark": True,
+        "preset": "fast", # or fast
         "output_format": "wav",
         "seed": 0,
     }
-    
+
     text_buffer = []
-    
+
+    def apply_preset(cfg: dict) -> None:
+        """Mutates cfg in-place based on preset, and forces watermark off."""
+        preset = (cfg.get("preset") or "best").lower()
+
+        if preset == "fast":
+            # Fast first chunk (slightly riskier quality/stability)
+            cfg["n_cfm_timesteps"] = 2
+            cfg["context_window"] = 25
+            cfg["chunk_size"] = 40
+            cfg["first_chunk_size"] = 5
+        else:
+            # Best balanced throughput/stability based on your sweep
+            cfg["n_cfm_timesteps"] = 3
+            cfg["context_window"] = 25
+            cfg["chunk_size"] = 25
+            cfg["first_chunk_size"] = 5
+
+        # Always disable watermark in streaming hot path
+        cfg["skip_watermark"] = True
+
     try:
         while True:
-            # Receive message from client
             data = await websocket.receive_text()
             message = json.loads(data)
-            
+
             msg_type = message.get("type")
             logger.debug(f"WebSocket received: {msg_type}")
-            
+
             if msg_type == "config":
-                # Update configuration
-                for key in ["voice_mode", "predefined_voice_id", "reference_audio_filename", 
-                           "language", "temperature", "exaggeration", "cfg_weight", 
-                           "chunk_size", "first_chunk_size", "output_format", "seed"]:
+                # Update supported keys
+                for key in [
+                    "voice_mode",
+                    "predefined_voice_id",
+                    "reference_audio_filename",
+                    "language",
+                    "temperature",
+                    "exaggeration",
+                    "cfg_weight",
+                    "chunk_size",
+                    "first_chunk_size",
+                    "context_window",
+                    "n_cfm_timesteps",
+                    "output_format",
+                    "seed",
+                    "preset",
+                ]:
                     if key in message:
                         config[key] = message[key]
-                
-                logger.info(f"WebSocket config updated: voice_mode={config['voice_mode']}, language={config['language']}")
+
+                # Apply preset after updates (so preset wins)
+                apply_preset(config)
+
+                logger.info(
+                    "WebSocket config updated: "
+                    f"voice_mode={config['voice_mode']}, lang={config['language']}, "
+                    f"preset={config['preset']}, cfm={config['n_cfm_timesteps']}, "
+                    f"ctx={config['context_window']}, chunk={config['chunk_size']}, "
+                    f"first_chunk={config['first_chunk_size']}, skip_wm={config['skip_watermark']}"
+                )
+
                 await websocket.send_json({
                     "type": "config_ack",
-                    "message": "Configuration updated successfully"
+                    "message": "Configuration updated successfully",
+                    "applied_config": {
+                        "voice_mode": config["voice_mode"],
+                        "language": config["language"],
+                        "preset": config["preset"],
+                        "temperature": config["temperature"],
+                        "exaggeration": config["exaggeration"],
+                        "cfg_weight": config["cfg_weight"],
+                        "first_chunk_size": config["first_chunk_size"],
+                        "chunk_size": config["chunk_size"],
+                        "context_window": config["context_window"],
+                        "n_cfm_timesteps": config["n_cfm_timesteps"],
+                        "skip_watermark": config["skip_watermark"],
+                        "output_format": config["output_format"],
+                        "seed": config["seed"],
+                    }
                 })
-                
+
             elif msg_type == "text":
-                # Buffer text chunk
                 text_chunk = message.get("data", "")
                 if text_chunk:
                     text_buffer.append(text_chunk)
                     logger.debug(f"WebSocket buffered text: {len(text_chunk)} chars")
-                
+
             elif msg_type == "flush":
-                # Synthesize buffered text and stream back
                 if not text_buffer:
                     await websocket.send_json({
                         "type": "done",
@@ -1669,26 +1723,26 @@ async def websocket_tts_stream(websocket: WebSocket):
                         "message": "No text to synthesize"
                     })
                     continue
-                
+
                 full_text = " ".join(text_buffer)
-                logger.info(f"WebSocket flush: synthesizing {len(full_text)} chars")
                 text_buffer.clear()
-                
-                # Validate configuration
+                logger.info(f"WebSocket flush: synthesizing {len(full_text)} chars")
+
+                # Validate voice config
                 if config["voice_mode"] == "predefined" and not config.get("predefined_voice_id"):
                     await websocket.send_json({
                         "type": "error",
                         "message": "predefined_voice_id required for predefined voice mode"
                     })
                     continue
-                
+
                 if config["voice_mode"] == "clone" and not config.get("reference_audio_filename"):
                     await websocket.send_json({
                         "type": "error",
                         "message": "reference_audio_filename required for clone voice mode"
                     })
                     continue
-                
+
                 # Resolve voice path
                 audio_prompt_path_for_engine = None
                 if config["voice_mode"] == "predefined":
@@ -1697,28 +1751,33 @@ async def websocket_tts_stream(websocket: WebSocket):
                 elif config["voice_mode"] == "clone":
                     ref_dir = get_reference_audio_path(ensure_absolute=True)
                     audio_prompt_path_for_engine = ref_dir / config["reference_audio_filename"]
-                
+
                 if audio_prompt_path_for_engine and not audio_prompt_path_for_engine.is_file():
                     await websocket.send_json({
                         "type": "error",
                         "message": f"Voice file not found: {audio_prompt_path_for_engine.name}"
                     })
                     continue
-                
-                # Check if multilingual model is loaded
+
+                # Ensure multilingual model loaded
                 model_info = engine.get_model_info()
                 if model_info.get("type") != "multilingual":
                     await websocket.send_json({
                         "type": "error",
-                        "message": "WebSocket streaming requires multilingual model. Current model type: " + model_info.get("type", "unknown")
+                        "message": "WebSocket streaming requires multilingual model. Current model type: " +
+                                   model_info.get("type", "unknown")
                     })
                     continue
-                
+
+                # Apply preset again (in case caller changed preset earlier but didn’t resend config)
+                apply_preset(config)
+
                 # Stream synthesis
                 try:
                     chunk_count = 0
+                    last_metrics = None
                     import base64
-                    
+
                     for audio_chunk_tensor, metrics in engine.synthesize_stream(
                         text=full_text,
                         language_id=config.get("language"),
@@ -1729,43 +1788,60 @@ async def websocket_tts_stream(websocket: WebSocket):
                         seed=config.get("seed", 0),
                         chunk_size=config.get("chunk_size", 25),
                         first_chunk_size=config.get("first_chunk_size", 5),
+                        context_window=config.get("context_window", 25),
+                        n_cfm_timesteps=config.get("n_cfm_timesteps", 3),
+                        skip_watermark=True,
                         print_metrics=False,
                     ):
-                        # Convert tensor to numpy
+                        last_metrics = metrics
+
                         chunk_np = audio_chunk_tensor.cpu().numpy().squeeze()
-                        
-                        # Encode to requested format
                         model_sr = engine.chatterbox_model.sr if engine.chatterbox_model else 24000
+
                         encoded_chunk = utils.encode_audio(
                             audio_array=chunk_np,
                             sample_rate=model_sr,
                             output_format=config.get("output_format", "wav"),
                             target_sample_rate=get_audio_sample_rate(),
                         )
-                        
+
                         if encoded_chunk:
-                            # Send as base64 for JSON transport
                             await websocket.send_json({
                                 "type": "audio",
-                                "data": base64.b64encode(encoded_chunk).decode('utf-8'),
+                                "data": base64.b64encode(encoded_chunk).decode("utf-8"),
                                 "chunk_index": chunk_count,
                                 "format": config.get("output_format", "wav"),
                                 "sample_rate": get_audio_sample_rate(),
                             })
                             chunk_count += 1
-                            
-                            if chunk_count == 1:
-                                logger.info(f"WebSocket: First chunk sent (latency: {metrics.get('latency_to_first_chunk', 'N/A')}s)")
-                    
-                    # Signal completion
+
+                            if chunk_count == 1 and last_metrics:
+                                logger.info(
+                                    f"WebSocket: First chunk sent (latency: "
+                                    f"{last_metrics.get('latency_to_first_chunk', 'N/A')}s)"
+                                )
+
                     await websocket.send_json({
                         "type": "done",
                         "chunks_sent": chunk_count,
-                        "rtf": metrics.get("rtf"),
-                        "total_duration": metrics.get("total_audio_duration"),
+                        "rtf": (last_metrics.get("rtf") if last_metrics else None),
+                        "total_duration": (last_metrics.get("total_audio_duration") if last_metrics else None),
+                        "total_generation_time": (last_metrics.get("total_generation_time") if last_metrics else None),
+                        "applied_config": {
+                            "preset": config["preset"],
+                            "context_window": config["context_window"],
+                            "n_cfm_timesteps": config["n_cfm_timesteps"],
+                            "chunk_size": config["chunk_size"],
+                            "first_chunk_size": config["first_chunk_size"],
+                            "skip_watermark": True,
+                        }
                     })
-                    logger.info(f"WebSocket synthesis complete: {chunk_count} chunks, RTF={metrics.get('rtf', 'N/A')}")
-                    
+
+                    logger.info(
+                        f"WebSocket synthesis complete: {chunk_count} chunks, "
+                        f"RTF={(last_metrics.get('rtf') if last_metrics else 'N/A')}"
+                    )
+
                 except RuntimeError as e:
                     logger.error(f"WebSocket TTS synthesis runtime error: {e}", exc_info=True)
                     await websocket.send_json({
@@ -1778,21 +1854,21 @@ async def websocket_tts_stream(websocket: WebSocket):
                         "type": "error",
                         "message": f"Synthesis failed: {str(e)}"
                     })
-                
+
             elif msg_type == "close":
-                # Client requested close
                 logger.info("WebSocket client requested close")
                 await websocket.send_json({"type": "goodbye"})
                 break
-                
+
             else:
                 await websocket.send_json({
                     "type": "error",
                     "message": f"Unknown message type: {msg_type}"
                 })
-    
+
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected normally")
+
     except json.JSONDecodeError as e:
         logger.error(f"WebSocket JSON decode error: {e}")
         try:
@@ -1800,8 +1876,9 @@ async def websocket_tts_stream(websocket: WebSocket):
                 "type": "error",
                 "message": f"Invalid JSON: {str(e)}"
             })
-        except:
+        except Exception:
             pass
+
     except Exception as e:
         logger.error(f"WebSocket error: {e}", exc_info=True)
         try:
@@ -1809,12 +1886,13 @@ async def websocket_tts_stream(websocket: WebSocket):
                 "type": "error",
                 "message": f"Server error: {str(e)}"
             })
-        except:
+        except Exception:
             pass
+
     finally:
         try:
             await websocket.close()
-        except:
+        except Exception:
             pass
         logger.info("WebSocket connection closed")
 
