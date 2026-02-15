@@ -436,6 +436,129 @@ def synthesize(
         return None, None
 
 
+def synthesize_stream(
+    text: str,
+    language_id: Optional[str] = None,
+    audio_prompt_path: Optional[str] = None,
+    temperature: float = 0.8,
+    exaggeration: float = 0.5,
+    cfg_weight: float = 0.5,
+    seed: int = 0,
+    chunk_size: int = 25,
+    first_chunk_size: int = 5,
+    context_window: int = 50,
+    fade_duration: float = 0.02,
+    print_metrics: bool = False,
+    max_new_tokens: int = 1000,
+    max_history_tokens: int = 500,
+):
+    """
+    Synthesizes audio from text using streaming generation (multilingual model only).
+    Yields audio chunks as they are produced for lower latency playback.
+
+    Args:
+        text: The text to synthesize.
+        language_id: Language code for multilingual model (e.g., 'en', 'es', 'fr').
+        audio_prompt_path: Path to an audio file for voice cloning or predefined voice.
+        temperature: Controls randomness in generation.
+        exaggeration: Controls expressiveness.
+        cfg_weight: Classifier-Free Guidance weight.
+        seed: Random seed for generation. If 0, default randomness is used.
+        chunk_size: Number of tokens per chunk after the first chunk.
+        first_chunk_size: Number of tokens in the first chunk (for lower initial latency).
+        context_window: Number of previous tokens to use as context when decoding.
+        fade_duration: Duration of fade-in for each chunk (seconds).
+        print_metrics: Whether to print performance metrics to console.
+        max_new_tokens: Maximum number of speech tokens to generate.
+        max_history_tokens: Maximum token history to maintain (prevents memory growth).
+
+    Yields:
+        Tuple of (audio_chunk_tensor, metrics_dict) for each generated chunk.
+
+    Raises:
+        RuntimeError: If model is not loaded or not a multilingual model.
+        ValueError: If parameters are invalid.
+    """
+    global chatterbox_model
+
+    if not MODEL_LOADED or chatterbox_model is None:
+        logger.error("TTS model is not loaded. Cannot synthesize streaming audio.")
+        raise RuntimeError("TTS model is not loaded")
+
+    # Streaming is only supported for multilingual model
+    if loaded_model_type != "multilingual":
+        logger.error(
+            f"Streaming synthesis is only supported for multilingual model, "
+            f"but current model type is '{loaded_model_type}'"
+        )
+        raise RuntimeError(
+            f"Streaming not supported for model type '{loaded_model_type}'. "
+            f"Please use 'multilingual' model or use the non-streaming synthesize() function."
+        )
+
+    try:
+        # Set seed globally if a specific seed value is provided and is non-zero
+        if seed != 0:
+            logger.info(f"Applying user-provided seed for streaming generation: {seed}")
+            set_seed(seed)
+        else:
+            logger.info(
+                "Using default (potentially random) generation behavior for streaming as seed is 0."
+            )
+
+        logger.info(
+            f"Starting streaming synthesis with params: audio_prompt='{audio_prompt_path}', "
+            f"temp={temperature}, exag={exaggeration}, cfg_weight={cfg_weight}, "
+            f"chunk_size={chunk_size}, first_chunk_size={first_chunk_size}, language_id={language_id}"
+        )
+
+        # Default language if not provided
+        if not language_id:
+            language_id = config_manager.get_string("generation_defaults.language", "en")
+
+        # Call the multilingual model's streaming generate function
+        for audio_chunk_tensor, metrics in chatterbox_model.generate_stream(
+            text=text,
+            language_id=language_id,
+            audio_prompt_path=audio_prompt_path,
+            exaggeration=exaggeration,
+            cfg_weight=cfg_weight,
+            temperature=temperature,
+            repetition_penalty=2.0,  # Could be made configurable
+            min_p=0.05,  # Could be made configurable
+            top_p=1.0,  # Could be made configurable
+            chunk_size=chunk_size,
+            first_chunk_size=first_chunk_size,
+            context_window=context_window,
+            fade_duration=fade_duration,
+            print_metrics=print_metrics,
+            max_new_tokens=max_new_tokens,
+            max_history_tokens=max_history_tokens,
+        ):
+            # Convert metrics dataclass to dict for easier serialization
+            metrics_dict = {
+                "latency_to_first_chunk": metrics.latency_to_first_chunk,
+                "rtf": metrics.rtf,
+                "total_generation_time": metrics.total_generation_time,
+                "total_audio_duration": metrics.total_audio_duration,
+                "chunk_count": metrics.chunk_count,
+                "prep_time": metrics.prep_time,
+                "tokenization_time": metrics.tokenization_time,
+                "first_token_time": metrics.first_token_time,
+                "first_decode_time": metrics.first_decode_time,
+            }
+
+            yield audio_chunk_tensor, metrics_dict
+
+        logger.info("Streaming synthesis completed successfully")
+
+    except RuntimeError:
+        raise
+    except Exception as e:
+        logger.error(f"Error during streaming TTS synthesis: {e}", exc_info=True)
+        raise RuntimeError(f"Streaming synthesis failed: {e}")
+
+
 def reload_model() -> bool:
     """
     Unloads the current model, clears GPU memory, and reloads the model

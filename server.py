@@ -70,6 +70,34 @@ import utils  # Utility functions
 from pydantic import BaseModel, Field
 
 
+class StreamingTTSRequest(BaseModel):
+    """Request model for streaming TTS generation."""
+    text: str = Field(..., min_length=1, description="Text to synthesize")
+    voice_mode: str = Field(
+        "predefined", description="Voice mode: 'predefined' or 'clone'"
+    )
+    predefined_voice_id: Optional[str] = Field(
+        None, description="Filename of predefined voice (required if voice_mode='predefined')"
+    )
+    reference_audio_filename: Optional[str] = Field(
+        None, description="Filename of reference audio (required if voice_mode='clone')"
+    )
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    exaggeration: Optional[float] = Field(None, ge=0.0, le=1.0)
+    cfg_weight: Optional[float] = Field(None, ge=0.0, le=2.0)
+    seed: Optional[int] = Field(None, ge=0)
+    language: Optional[str] = Field(None, description="Language code for multilingual model (e.g., 'en', 'es', 'fr')")
+    
+    # Streaming-specific parameters
+    chunk_size: int = Field(25, ge=5, le=100, description="Tokens per chunk after first chunk")
+    first_chunk_size: int = Field(5, ge=1, le=50, description="Tokens in first chunk (lower for faster initial response)")
+    context_window: int = Field(50, ge=10, le=200, description="Number of previous tokens for context")
+    fade_duration: float = Field(0.02, ge=0.0, le=0.1, description="Fade-in duration per chunk (seconds)")
+    print_metrics: bool = Field(False, description="Print performance metrics to server console")
+    max_new_tokens: int = Field(1000, ge=100, le=3000, description="Maximum speech tokens to generate")
+    output_format: str = Field("wav", description="Output format: 'wav' or 'opus'")
+
+
 class OpenAISpeechRequest(BaseModel):
     model: str
     input_: str = Field(..., alias="input")
@@ -253,7 +281,7 @@ templates = Jinja2Templates(directory=str(ui_static_path))
 
 def _generate_equal_power_curves(n_samples: int):
     """
-    Generate equal-power crossfade curves using cos²/sin² functions.
+    Generate equal-power crossfade curves using cosÂ²/sinÂ² functions.
     These curves maintain perceptually constant loudness during transitions.
 
     Args:
@@ -263,8 +291,8 @@ def _generate_equal_power_curves(n_samples: int):
         Tuple of (fade_out, fade_in) numpy arrays
     """
     t = np.linspace(0, np.pi / 2, n_samples, dtype=np.float32)
-    fade_out = np.cos(t) ** 2  # 1 → 0
-    fade_in = np.sin(t) ** 2  # 0 → 1
+    fade_out = np.cos(t) ** 2  # 1 â†’ 0
+    fade_in = np.sin(t) ** 2  # 0 â†’ 1
     return fade_out, fade_in
 
 
@@ -1066,10 +1094,10 @@ async def custom_tts_endpoint(
                 # Create silence buffer (oversized to compensate for crossfade overlap)
                 silence = np.zeros(silence_buffer_samples, dtype=np.float32)
 
-                # Crossfade: current result → silence (speech fades into silence)
+                # Crossfade: current result â†’ silence (speech fades into silence)
                 result = _crossfade_with_overlap(result, silence, fade_samples)
 
-                # Crossfade: result → next chunk (silence fades into speech)
+                # Crossfade: result â†’ next chunk (silence fades into speech)
                 result = _crossfade_with_overlap(result, chunks[i], fade_samples)
 
             final_audio_np = result
@@ -1220,6 +1248,221 @@ async def custom_tts_endpoint(
 
     return StreamingResponse(
         io.BytesIO(encoded_audio_bytes), media_type=media_type, headers=headers
+    )
+
+
+@app.post(
+    "/tts/stream",
+    tags=["TTS Generation"],
+    summary="Generate speech with streaming (multilingual model only)",
+    responses={
+        200: {
+            "content": {"audio/wav": {}, "audio/opus": {}},
+            "description": "Streaming audio chunks.",
+        },
+        400: {
+            "model": ErrorResponse,
+            "description": "Invalid request parameters or input.",
+        },
+        404: {
+            "model": ErrorResponse,
+            "description": "Required resource not found (e.g., voice file).",
+        },
+        500: {
+            "model": ErrorResponse,
+            "description": "Internal server error during generation.",
+        },
+        503: {
+            "model": ErrorResponse,
+            "description": "TTS engine not available, model not loaded, or streaming not supported.",
+        },
+    },
+)
+async def streaming_tts_endpoint(request: StreamingTTSRequest):
+    """
+    Generates speech audio from text using streaming generation (multilingual model only).
+    Returns audio chunks progressively as they are generated for lower latency playback.
+    
+    This endpoint is only available when using the multilingual Chatterbox model.
+    Audio chunks are streamed with minimal latency for real-time applications.
+    """
+    if not engine.MODEL_LOADED:
+        logger.error("Streaming TTS request failed: Model not loaded.")
+        raise HTTPException(
+            status_code=503,
+            detail="TTS engine model is not currently loaded or available.",
+        )
+
+    # Check if streaming is supported (multilingual model only)
+    model_info = engine.get_model_info()
+    if model_info.get("type") != "multilingual":
+        logger.error(
+            f"Streaming TTS requested but model type is '{model_info.get('type')}', not 'multilingual'"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Streaming TTS is only supported with the multilingual model. "
+            "Current model does not support streaming. Please use the regular /tts endpoint "
+            "or switch to the multilingual model.",
+        )
+
+    logger.info(
+        f"Received /tts/stream request: mode='{request.voice_mode}', "
+        f"format='{request.output_format}', language='{request.language}'"
+    )
+    logger.debug(
+        f"Streaming params: chunk_size={request.chunk_size}, "
+        f"first_chunk_size={request.first_chunk_size}, seed={request.seed}"
+    )
+    logger.debug(f"Input text (first 100 chars): '{request.text[:100]}...'")
+
+    # Resolve voice path
+    audio_prompt_path_for_engine: Optional[Path] = None
+    if request.voice_mode == "predefined":
+        if not request.predefined_voice_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing 'predefined_voice_id' for 'predefined' voice mode.",
+            )
+        voices_dir = get_predefined_voices_path(ensure_absolute=True)
+        potential_path = voices_dir / request.predefined_voice_id
+        if not potential_path.is_file():
+            logger.error(f"Predefined voice file not found: {potential_path}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Predefined voice file '{request.predefined_voice_id}' not found.",
+            )
+        audio_prompt_path_for_engine = potential_path
+        logger.info(f"Using predefined voice: {request.predefined_voice_id}")
+
+    elif request.voice_mode == "clone":
+        if not request.reference_audio_filename:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing 'reference_audio_filename' for 'clone' voice mode.",
+            )
+        ref_dir = get_reference_audio_path(ensure_absolute=True)
+        potential_path = ref_dir / request.reference_audio_filename
+        if not potential_path.is_file():
+            logger.error(f"Reference audio file for cloning not found: {potential_path}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Reference audio file '{request.reference_audio_filename}' not found.",
+            )
+        max_dur = config_manager.get_int("audio_output.max_reference_duration_sec", 30)
+        is_valid, msg = utils.validate_reference_audio(potential_path, max_dur)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=f"Invalid reference audio: {msg}")
+        audio_prompt_path_for_engine = potential_path
+        logger.info(f"Using reference audio for cloning: {request.reference_audio_filename}")
+
+    # Define the streaming generator
+    async def audio_chunk_generator():
+        """Generator that yields encoded audio chunks as they're produced."""
+        try:
+            chunk_count = 0
+            total_bytes_sent = 0
+            
+            # Get the target sample rate for output
+            target_sr = get_audio_sample_rate()
+            
+            for audio_chunk_tensor, metrics in engine.synthesize_stream(
+                text=request.text,
+                language_id=request.language,
+                audio_prompt_path=(
+                    str(audio_prompt_path_for_engine)
+                    if audio_prompt_path_for_engine
+                    else None
+                ),
+                temperature=(
+                    request.temperature
+                    if request.temperature is not None
+                    else get_gen_default_temperature()
+                ),
+                exaggeration=(
+                    request.exaggeration
+                    if request.exaggeration is not None
+                    else get_gen_default_exaggeration()
+                ),
+                cfg_weight=(
+                    request.cfg_weight
+                    if request.cfg_weight is not None
+                    else get_gen_default_cfg_weight()
+                ),
+                seed=(
+                    request.seed
+                    if request.seed is not None
+                    else get_gen_default_seed()
+                ),
+                chunk_size=request.chunk_size,
+                first_chunk_size=request.first_chunk_size,
+                context_window=request.context_window,
+                fade_duration=request.fade_duration,
+                print_metrics=request.print_metrics,
+                max_new_tokens=request.max_new_tokens,
+            ):
+                # Convert tensor to numpy
+                chunk_np = audio_chunk_tensor.cpu().numpy().squeeze()
+                
+                # The chunk comes from the model at its native sample rate (24kHz typically)
+                # We need to encode it at the target sample rate
+                model_sr = engine.chatterbox_model.sr if engine.chatterbox_model else 24000
+                
+                # Encode the chunk
+                encoded_chunk = utils.encode_audio(
+                    audio_array=chunk_np,
+                    sample_rate=model_sr,
+                    output_format=request.output_format,
+                    target_sample_rate=target_sr,
+                )
+                
+                if encoded_chunk is None or len(encoded_chunk) == 0:
+                    logger.warning(f"Failed to encode chunk {chunk_count}, skipping")
+                    continue
+                
+                chunk_count += 1
+                total_bytes_sent += len(encoded_chunk)
+                
+                # Log first chunk metrics
+                if chunk_count == 1:
+                    logger.info(
+                        f"First chunk encoded: {len(encoded_chunk)} bytes, "
+                        f"latency={metrics.get('latency_to_first_chunk', 'N/A')}s"
+                    )
+                
+                # Yield the encoded audio chunk
+                yield encoded_chunk
+            
+            # Log final statistics
+            logger.info(
+                f"Streaming complete: {chunk_count} chunks, {total_bytes_sent} total bytes, "
+                f"format={request.output_format}"
+            )
+            if metrics:
+                logger.info(
+                    f"Final metrics - RTF: {metrics.get('rtf', 'N/A')}, "
+                    f"Total time: {metrics.get('total_generation_time', 'N/A')}s, "
+                    f"Audio duration: {metrics.get('total_audio_duration', 'N/A')}s"
+                )
+                
+        except RuntimeError as e:
+            logger.error(f"Runtime error during streaming: {e}", exc_info=True)
+            # In a streaming context, we can't raise HTTPException after yielding started
+            # Just log the error - connection will close
+        except Exception as e:
+            logger.error(f"Error during streaming generation: {e}", exc_info=True)
+
+    # Determine media type
+    media_type = f"audio/{request.output_format}"
+    
+    # Return streaming response
+    return StreamingResponse(
+        audio_chunk_generator(),
+        media_type=media_type,
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+        }
     )
 
 
